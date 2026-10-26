@@ -21,6 +21,43 @@ const abs = (u, base) => { try { return new URL(u, base).href; } catch (e) { ret
 const unesc = s => s.replace(/\\u002F/gi, '/').replace(/\\\//g, '/').replace(/&amp;/g, '&');
 const uniqBy = (arr, key) => { const s = new Set(); return arr.filter(x => !s.has(x[key]) && s.add(x[key])); };
 
+
+/* ---- Extractor de enlace directo (para reproducir sin anuncios) ---- */
+function unpackAll(html) {
+  const out = [];
+  const re = /eval\(function\(p,a,c,k,e,[dr]\)\{[\s\S]*?\}\('([\s\S]*?)',(\d+),(\d+),'([\s\S]*?)'\.split\('\|'\)/g;
+  let m;
+  while ((m = re.exec(html))) {
+    try {
+      let p = m[1].replace(/\\'/g, "'").replace(/\\\\/g, '\\');
+      const a = +m[2]; let c = +m[3]; const k = m[4].split('|');
+      const e = n => (n < a ? '' : e(parseInt(n / a))) + ((n = n % a) > 35 ? String.fromCharCode(n + 29) : n.toString(36));
+      const d = {};
+      while (c--) d[e(c)] = k[c] || e(c);
+      out.push(p.replace(/\b\w+\b/g, w => (d[w] !== undefined ? d[w] : w)));
+    } catch (e) {}
+  }
+  return out;
+}
+async function resolveDirect(url, referer) {
+  if (/\.(m3u8|mp4)(\?|#|$)/i.test(url)) return { url };
+  const html = await get(url, referer);
+  const text = [html, ...unpackAll(html)].join('\n').replace(/\\u002F/gi, '/').replace(/\\\//g, '/');
+  const bad = /\.(jpg|jpeg|png|webp|gif|vtt|srt|ass|js|css)(\?|$)/i;
+  const pats = [
+    /["']?(?:file|src|source|hls\d?|url|video_url|contentUrl)["']?\s*[:=]\s*["'](https?:[^"'\s]+?\.m3u8[^"'\s]*)["']/i,
+    /["']?(?:file|src|source|video_url|contentUrl|url)["']?\s*[:=]\s*["'](https?:[^"'\s]+?\.mp4[^"'\s]*)["']/i,
+    /(https?:\/\/[^"'\s\\<>]+\.m3u8[^"'\s\\<>]*)/i,
+    /<source[^>]+src=["']([^"']+)["']/i,
+    /(https?:\/\/[^"'\s\\<>]+\.mp4[^"'\s\\<>]*)/i
+  ];
+  for (const p of pats) {
+    const m = text.match(p);
+    if (m) { const u = abs(m[1].replace(/&amp;/g, '&'), url); if (!bad.test(u)) return { url: u }; }
+  }
+  return null;
+}
+
 /* ---------- JKAnime ---------- */
 const JK = {
   id: 'jkanime', name: 'JKAnime', base: 'https://jkanime.net',
@@ -82,6 +119,7 @@ const JK = {
     return { title: title.trim(), cover: abs(cover, this.base), synopsis, episodes: eps };
   },
   episodeUrl(url, n) { return url.replace(/\/?$/, '/') + n + '/'; },
+  resolve(u) { return resolveDirect(u, this.base + '/'); },
   async servers(epUrl) {
     const html = await get(epUrl, this.base + '/');
     const out = [];
@@ -94,6 +132,21 @@ const JK = {
     const m = html.match(/var servers\s*=\s*(\[[\s\S]*?\]);/);
     if (m) { try { list = JSON.parse(m[1]); } catch (e) {} }
     const names = list.map(s => s.server);
+    // etiquetas reales de las pestañas del reproductor (Desu, Magi, ...)
+    const pdoc = toDoc(html);
+    const tabLabel = {};
+    pdoc.querySelectorAll('[onclick*="video["], [data-video], [data-id]').forEach(t => {
+      const oc = t.getAttribute('onclick') || '';
+      const mm = oc.match(/video\[(\d+)\]/);
+      const idx = mm ? mm[1] : (t.getAttribute('data-video') || null);
+      const txt = (t.textContent || '').trim();
+      if (idx !== null && txt && txt.length < 30 && !(idx in tabLabel)) tabLabel[idx] = txt;
+    });
+    const found = [];
+    const reIdx = /video\[(\d+)\]\s*=/g; let q;
+    while ((q = reIdx.exec(html))) found.push(+q[1]);
+    const base0 = found.length ? Math.min(...found) : 1;        // los indices pueden empezar en 0 o en 1
+    const nameOf = i => tabLabel[i] || names[i - base0] || ('Servidor ' + (i - base0 + 1));
     // 1) todos los video[n] = '<iframe src=...>'
     const snippets = [];
     const re = /video\[(\d+)\]\s*=\s*(['"])([\s\S]*?)\2\s*;/g;
@@ -101,7 +154,7 @@ const JK = {
     while ((x = re.exec(html))) {
       snippets.push(x[0].slice(0, 260));
       const s = x[3].match(/src=\\?["']([^"'\\\s]+)/);
-      if (s) add(names[x[1] - 1] || ('Servidor ' + x[1]), abs(unesc(s[1]), this.base));
+      if (s) add(nameOf(+x[1]), abs(unesc(s[1]), this.base));
     }
     // 2) "remote" en base64 -> si es una URL, es un embed directo
     list.forEach(sv => {
@@ -110,7 +163,7 @@ const JK = {
     // 3) cualquier iframe suelto
     if (!out.length) toDoc(html).querySelectorAll('iframe[src]').forEach((f, i) => add('Servidor ' + (i + 1), abs(f.getAttribute('src'), this.base)));
     out.diag = 'JKAnime\nservers=' + (m ? m[1].slice(0, 2500) : '(no encontrado)') +
-      '\n\nvideo[] (' + snippets.length + '):\n' + snippets.join('\n') + '\n\nencontrados: ' + out.map(o => o.name).join(', ');
+      '\n\ntabs=' + JSON.stringify(tabLabel) + ' base0=' + base0 + '\n\nvideo[] (' + snippets.length + '):\n' + snippets.join('\n') + '\n\nencontrados: ' + out.map(o => o.name).join(', ');
     return out;
   }
 };
@@ -166,6 +219,7 @@ const AV = {
     };
   },
   episodeUrl(url, n) { return url.replace(/\/$/, '') + '/' + n; },
+  resolve(u) { return resolveDirect(u, this.base + '/'); },
   async servers(epUrl) {
     const html = await get(epUrl, this.base + '/');
     const out = [];

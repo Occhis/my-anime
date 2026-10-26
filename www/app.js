@@ -93,29 +93,58 @@ async function viewWatch(src, url, n) {
       ${prev ? `<a class="btn sec" href="#/watch/${src}/${enc(url)}/${prev}">◀ Anterior</a>` : ''}
       ${next ? `<a class="btn" href="#/watch/${src}/${enc(url)}/${next}">Siguiente ▶</a>` : ''}</div>
       <p class="msg" style="padding:4px">${servers.length} servidores encontrados. Si uno no carga, prueba otro. Gira el celular para ver mejor.</p>
+      <div class="row"><button class="btn sec" id="tgS"></button><button class="btn sec" id="tgD"></button></div>
       <button class="btn sec" id="dg">🛠 Diagnóstico</button>
       <textarea id="dgbox" readonly style="display:none;width:100%;height:220px;margin-top:8px;background:#1a1d27;color:#ccc;border:0;border-radius:8px;font-size:11px"></textarea>`;
     const pl = $('#pl');
-    const play = k => {
-      if (!servers[k]) return;
-      pl.querySelectorAll('iframe,video').forEach(f => f.remove());
-      let f;
-      if (/\.(m3u8|mp4)(\?|#|$)/i.test(servers[k].url)) {
-        f = document.createElement('video');
-        f.controls = true; f.autoplay = true; f.playsInline = true;
-        f.style.cssText = 'width:100%;height:100%;background:#000';
-        f.src = servers[k].url;
-      } else {
-        f = document.createElement('iframe');
-        f.src = servers[k].url;
-        f.allow = 'autoplay; fullscreen; encrypted-media; picture-in-picture';
-        f.allowFullscreen = true;
-        f.referrerPolicy = 'origin';
-      }
+    let ptok = 0;
+    const clearPl = () => pl.querySelectorAll('iframe,video,.pmsg').forEach(f => f.remove());
+    const say = t => { clearPl(); const d = document.createElement('div'); d.className = 'pmsg'; d.style.cssText = 'color:#aaa;padding:16px;font-size:14px'; d.textContent = t; pl.appendChild(d); };
+    const showFrame = u => {
+      clearPl();
+      const f = document.createElement('iframe');
+      f.src = u;
+      f.allow = 'autoplay; fullscreen; encrypted-media; picture-in-picture';
+      f.allowFullscreen = true;
+      f.referrerPolicy = 'no-referrer';
+      // sandbox sin allow-popups ni allow-top-navigation: los anuncios no pueden abrir ventanas ni redirigir la app
+      if (store.get('shield', true)) f.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-forms allow-presentation');
       pl.appendChild(f);
-      $('#srv').querySelectorAll('.chip').forEach(c => c.classList.toggle('on', +c.dataset.k === k));
-      store.set('pref', servers[k].name);
     };
+    const showVideo = (u, onFail) => {
+      clearPl();
+      const v = document.createElement('video');
+      v.controls = true; v.autoplay = true; v.playsInline = true;
+      v.style.cssText = 'width:100%;height:100%;background:#000';
+      v.onerror = onFail;
+      v.src = u;
+      pl.appendChild(v);
+    };
+    const play = async k => {
+      if (!servers[k]) return;
+      const my = ++ptok;
+      const sv = servers[k];
+      $('#srv').querySelectorAll('.chip').forEach(c => c.classList.toggle('on', +c.dataset.k === k));
+      store.set('pref', sv.name);
+      if (/\.(m3u8|mp4)(\?|#|$)/i.test(sv.url)) { showVideo(sv.url, () => showFrame(sv.url)); return; }
+      if (store.get('direct', true)) {
+        say('Buscando enlace directo (sin anuncios)…');
+        try {
+          const r = await Promise.race([S.resolve(sv.url), new Promise(res => setTimeout(() => res(null), 8000))]);
+          if (my !== ptok) return;
+          if (r && r.url) { showVideo(r.url, () => { if (my === ptok) showFrame(sv.url); }); return; }
+        } catch (e) { if (my !== ptok) return; }
+      }
+      showFrame(sv.url);
+    };
+    const refreshToggles = () => {
+      $('#tgS').textContent = '🛡 Anti-anuncios: ' + (store.get('shield', true) ? 'ON' : 'OFF');
+      $('#tgD').textContent = '⚡ Enlace directo: ' + (store.get('direct', true) ? 'ON' : 'OFF');
+    };
+    let cur = 0;
+    $('#tgS').onclick = () => { store.set('shield', !store.get('shield', true)); refreshToggles(); play(cur); };
+    $('#tgD').onclick = () => { store.set('direct', !store.get('direct', true)); refreshToggles(); play(cur); };
+    refreshToggles();
     $('#dg').onclick = () => {
       const box = $('#dgbox');
       box.style.display = 'block';
@@ -123,10 +152,10 @@ async function viewWatch(src, url, n) {
       box.focus(); box.select();
       try { document.execCommand('copy'); } catch (e) {}
     };
-    $('#srv').querySelectorAll('.chip').forEach(c => c.onclick = () => play(+c.dataset.k));
+    $('#srv').querySelectorAll('.chip').forEach(c => c.onclick = () => { cur = +c.dataset.k; play(cur); });
     $('#fs').onclick = () => pl.classList.add('fs');
     $('#fsx').onclick = () => pl.classList.remove('fs');
-    play(idx);
+    cur = idx; play(idx);
   } catch (e) { if (my === token) app.innerHTML = `<button class="btn sec" onclick="history.back()">← Volver</button>` + errBox(e, 'route()'); }
 }
 

@@ -18,9 +18,223 @@ jobs:
       - run: npm install
       - run: npx cap add android
       - run: npx cap sync android
+      - name: Anti-anuncios nativo (MainActivity)
+        run: |
+          DIR=android/app/src/main/java/com/mianime/app
+          cp $DIR/MainActivity.java /tmp/MainActivity.orig
+          cat > $DIR/MainActivity.java <<'JAVAEOF'
+          package com.mianime.app;
+
+          import android.content.pm.ActivityInfo;
+          import android.os.Bundle;
+          import android.os.Message;
+          import android.view.View;
+          import android.view.ViewGroup;
+          import android.webkit.CookieManager;
+          import android.webkit.WebChromeClient;
+          import android.webkit.WebResourceRequest;
+          import android.webkit.WebResourceResponse;
+          import android.webkit.WebSettings;
+          import android.webkit.WebView;
+          import android.widget.FrameLayout;
+          import com.getcapacitor.Bridge;
+          import com.getcapacitor.BridgeActivity;
+          import com.getcapacitor.BridgeWebChromeClient;
+          import com.getcapacitor.BridgeWebViewClient;
+          import java.io.ByteArrayInputStream;
+          import java.io.InputStream;
+          import java.net.HttpURLConnection;
+          import java.net.URL;
+          import java.util.HashMap;
+          import java.util.Map;
+
+          public class MainActivity extends BridgeActivity {
+
+              // Dominios de publicidad / popups / redirecciones (se bloquean a nivel de red)
+              private static final String[] ADS = {
+                  "doubleclick.net", "googlesyndication.com", "googleadservices.com", "adservice.google",
+                  "popads.net", "popcash.net", "propellerads.com", "propellerclick.com", "onclickads.net",
+                  "adsterra.com", "highperformanceformat.com", "highperformancegate.com", "profitablegatecpm.com",
+                  "profitablecpmrate.com", "effectivegatecpm.com", "effectiveratecpm.com", "juicyads.com",
+                  "exoclick.com", "exosrv.com", "exdynsrv.com", "clickadu.com", "hilltopads.net", "trafficjunky.net",
+                  "adcash.com", "a-ads.com", "adsco.re", "ad-maven.com", "admaven.com", "pubfuture.com",
+                  "richads.com", "monetag.com", "ero-advertising.com", "tsyndicate.com", "onclkds.com",
+                  "realsrv.com", "acscdn.com", "adskeeper.com", "mgid.com", "taboola.com", "outbrain.com",
+                  "adnxs.com", "criteo.com", "bidvertiser.com", "revcontent.com", "popunder.net", "yllix.com",
+                  "clickaine.com", "pushnews.eu", "pushwhy.com", "notifpush.com", "ntvpforever.com",
+                  "bongacams.com", "stripchat.com", "chaturbate.com", "dtscout.com", "dtscdn.com",
+                  "histats.com", "yandex.ru", "mc.yandex", "adf.ly", "shorte.st", "linkvertise.com"
+              };
+
+              private volatile String currentUrl = "";
+              private View customView;
+              private WebChromeClient.CustomViewCallback customCb;
+
+              private static boolean isAd(String host) {
+                  if (host == null) return false;
+                  host = host.toLowerCase();
+                  for (String d : ADS) {
+                      if (host.equals(d) || host.endsWith("." + d)) return true;
+                  }
+                  return host.startsWith("ads.") || host.startsWith("ad.") || host.contains("popads") || host.contains("adserv");
+              }
+
+              private String refererFor() {
+                  String u = currentUrl;
+                  if (u.contains("/watch/animeav1/")) return "https://animeav1.com/";
+                  if (u.contains("/watch/jkanime/")) return "https://jkanime.net/";
+                  return null;
+              }
+
+              @Override
+              protected void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+                  Bridge b = getBridge();
+                  if (b == null) return;
+                  WebView wv = b.getWebView();
+                  WebSettings st = wv.getSettings();
+                  st.setSupportMultipleWindows(true);          // para poder bloquear los popups en onCreateWindow
+                  st.setJavaScriptCanOpenWindowsAutomatically(false);
+                  st.setMediaPlaybackRequiresUserGesture(false);
+                  wv.setWebViewClient(new Client(b));
+                  wv.setWebChromeClient(new Chrome(b));
+              }
+
+              private class Client extends BridgeWebViewClient {
+                  Client(Bridge b) { super(b); }
+
+                  @Override
+                  public void doUpdateVisitedHistory(WebView view, String url, boolean isReload) {
+                      super.doUpdateVisitedHistory(view, url, isReload);
+                      if (url != null) currentUrl = url;
+                  }
+
+                  @Override
+                  public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+                      if (!request.isForMainFrame()) return false;            // navegacion dentro de un iframe
+                      String host = request.getUrl().getHost();
+                      if ("localhost".equals(host)) return super.shouldOverrideUrlLoading(view, request);
+                      return true;                                            // la app nunca debe saltar a otra web
+                  }
+
+                  @Override
+                  public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+                      try {
+                          String host = request.getUrl().getHost();
+                          if (isAd(host)) {
+                              return new WebResourceResponse("text/plain", "utf-8", new ByteArrayInputStream(new byte[0]));
+                          }
+                          String ref = refererFor();
+                          String scheme = request.getUrl().getScheme();
+                          Map<String, String> h = request.getRequestHeaders();
+                          String accept = h == null ? null : h.get("Accept");
+                          boolean htmlFrame = !request.isForMainFrame() && "GET".equalsIgnoreCase(request.getMethod())
+                                  && accept != null && accept.contains("text/html");
+                          if (ref != null && htmlFrame && "https".equals(scheme) && !"localhost".equals(host)) {
+                              WebResourceResponse r = fetchWithReferer(request, ref);
+                              if (r != null) return r;
+                          }
+                      } catch (Exception e) { /* si algo falla, que lo gestione el WebView normal */ }
+                      return super.shouldInterceptRequest(view, request);
+                  }
+              }
+
+              // Descarga el HTML del reproductor poniendo como Referer la web de anime (muchos hosts lo exigen)
+              private WebResourceResponse fetchWithReferer(WebResourceRequest request, String ref) {
+                  try {
+                      String url = request.getUrl().toString();
+                      HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
+                      c.setInstanceFollowRedirects(false);
+                      c.setConnectTimeout(12000);
+                      c.setReadTimeout(15000);
+                      Map<String, String> h = request.getRequestHeaders();
+                      if (h != null) {
+                          for (Map.Entry<String, String> e : h.entrySet()) {
+                              String k = e.getKey();
+                              if (k.equalsIgnoreCase("Referer") || k.equalsIgnoreCase("Origin")) continue;
+                              c.setRequestProperty(k, e.getValue());
+                          }
+                      }
+                      c.setRequestProperty("Referer", ref);
+                      String cookie = CookieManager.getInstance().getCookie(url);
+                      if (cookie != null) c.setRequestProperty("Cookie", cookie);
+                      int code = c.getResponseCode();
+                      if (code >= 300 && code < 400) { c.disconnect(); return null; }   // redirecciones: las maneja el WebView
+                      Map<String, String> rh = new HashMap<>();
+                      for (Map.Entry<String, java.util.List<String>> e : c.getHeaderFields().entrySet()) {
+                          String k = e.getKey();
+                          if (k == null || e.getValue() == null || e.getValue().isEmpty()) continue;
+                          if (k.equalsIgnoreCase("Set-Cookie")) {
+                              for (String sc : e.getValue()) CookieManager.getInstance().setCookie(url, sc);
+                              continue;
+                          }
+                          if (k.equalsIgnoreCase("Content-Security-Policy") || k.equalsIgnoreCase("X-Frame-Options")
+                                  || k.equalsIgnoreCase("Content-Length") || k.equalsIgnoreCase("Content-Encoding")
+                                  || k.equalsIgnoreCase("Transfer-Encoding")) continue;
+                          rh.put(k, e.getValue().get(0));
+                      }
+                      InputStream in = code >= 400 ? c.getErrorStream() : c.getInputStream();
+                      if (in == null) return null;
+                      String ct = c.getContentType();
+                      String mime = "text/html", enc = "utf-8";
+                      if (ct != null) {
+                          String[] p = ct.split(";");
+                          mime = p[0].trim();
+                          for (String s : p) { s = s.trim(); if (s.toLowerCase().startsWith("charset=")) enc = s.substring(8); }
+                      }
+                      String msg = c.getResponseMessage();
+                      return new WebResourceResponse(mime, enc, code, (msg == null || msg.isEmpty()) ? "OK" : msg, rh, in);
+                  } catch (Exception e) {
+                      return null;
+                  }
+              }
+
+              private class Chrome extends BridgeWebChromeClient {
+                  Chrome(Bridge b) { super(b); }
+
+                  // Bloquea cualquier popup / nueva ventana
+                  @Override
+                  public boolean onCreateWindow(WebView view, boolean isDialog, boolean isUserGesture, Message resultMsg) {
+                      return false;
+                  }
+
+                  // Pantalla completa real para los videos
+                  @Override
+                  public void onShowCustomView(View view, WebChromeClient.CustomViewCallback callback) {
+                      if (customView != null) { callback.onCustomViewHidden(); return; }
+                      customView = view;
+                      customCb = callback;
+                      ((FrameLayout) getWindow().getDecorView()).addView(view,
+                              new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+                      getWindow().getDecorView().setSystemUiVisibility(
+                              View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                              | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY | View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
+                      setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
+                  }
+
+                  @Override
+                  public void onHideCustomView() {
+                      if (customView == null) return;
+                      ((FrameLayout) getWindow().getDecorView()).removeView(customView);
+                      customView = null;
+                      getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_VISIBLE);
+                      setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED);
+                      if (customCb != null) customCb.onCustomViewHidden();
+                      customCb = null;
+                  }
+              }
+          }
+
+          JAVAEOF
       - name: Compilar APK
         working-directory: android
-        run: chmod +x gradlew && ./gradlew assembleDebug
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug || {
+            echo "Fallo con el modulo anti-anuncios; compilando con MainActivity original"
+            cp /tmp/MainActivity.orig app/src/main/java/com/mianime/app/MainActivity.java
+            ./gradlew assembleDebug
+          }
       - uses: actions/upload-artifact@v4
         with:
           name: MiAnime-APK
