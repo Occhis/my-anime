@@ -2,6 +2,7 @@
    Cada fuente implementa:
      latest()          -> [{title,url,cover}]
      search(q)         -> [{title,url,cover}]
+     genre(g)          -> [{title,url,cover}]
      detail(url)       -> {title,cover,synopsis,episodes:[numeros]}
      episodeUrl(url,n) -> url del capítulo
      servers(epUrl)    -> [{name,url}]  (url de reproductor embebido)
@@ -18,7 +19,7 @@ async function get(url, referer) {
 }
 const toDoc = h => new DOMParser().parseFromString(h, 'text/html');
 const abs = (u, base) => { try { return new URL(u, base).href; } catch (e) { return u; } };
-const unesc = s => s.replace(/\\u002F/gi, '/').replace(/\\\//g, '/').replace(/&amp;/g, '&');
+const unesc = s => s.replace(/\u002F/gi, '/').replace(/\\//g, '/').replace(/&amp;/g, '&');
 const uniqBy = (arr, key) => { const s = new Set(); return arr.filter(x => !s.has(x[key]) && s.add(x[key])); };
 
 
@@ -29,12 +30,12 @@ function unpackAll(html) {
   let m;
   while ((m = re.exec(html))) {
     try {
-      let p = m[1].replace(/\\'/g, "'").replace(/\\\\/g, '\\');
+      let p = m[1].replace(/\'/g, "'").replace(/\\/g, '\');
       const a = +m[2]; let c = +m[3]; const k = m[4].split('|');
       const e = n => (n < a ? '' : e(parseInt(n / a))) + ((n = n % a) > 35 ? String.fromCharCode(n + 29) : n.toString(36));
       const d = {};
       while (c--) d[e(c)] = k[c] || e(c);
-      out.push(p.replace(/\b\w+\b/g, w => (d[w] !== undefined ? d[w] : w)));
+      out.push(p.replace(/\w+/g, w => (d[w] !== undefined ? d[w] : w)));
     } catch (e) {}
   }
   return out;
@@ -42,14 +43,14 @@ function unpackAll(html) {
 async function resolveDirect(url, referer) {
   if (/\.(m3u8|mp4)(\?|#|$)/i.test(url)) return { url };
   const html = await get(url, referer);
-  const text = [html, ...unpackAll(html)].join('\n').replace(/\\u002F/gi, '/').replace(/\\\//g, '/');
+  const text = [html, ...unpackAll(html)].join('\n').replace(/\u002F/gi, '/').replace(/\\//g, '/');
   const bad = /\.(jpg|jpeg|png|webp|gif|vtt|srt|ass|js|css)(\?|$)/i;
   const pats = [
     /["']?(?:file|src|source|hls\d?|url|video_url|contentUrl)["']?\s*[:=]\s*["'](https?:[^"'\s]+?\.m3u8[^"'\s]*)["']/i,
     /["']?(?:file|src|source|video_url|contentUrl|url)["']?\s*[:=]\s*["'](https?:[^"'\s]+?\.mp4[^"'\s]*)["']/i,
-    /(https?:\/\/[^"'\s\\<>]+\.m3u8[^"'\s\\<>]*)/i,
+    /(https?:\/\/[^"'\s\<>]+\.m3u8[^"'\s\<>]*)/i,
     /<source[^>]+src=["']([^"']+)["']/i,
-    /(https?:\/\/[^"'\s\\<>]+\.mp4[^"'\s\\<>]*)/i
+    /(https?:\/\/[^"'\s\<>]+\.mp4[^"'\s\<>]*)/i
   ];
   for (const p of pats) {
     const m = text.match(p);
@@ -66,21 +67,38 @@ const JK = {
     return this.base + '/' + p[0] + '/';
   },
   parseList(doc) {
-    const items = [...doc.querySelectorAll('.anime__item')].map(el => {
-      const a = el.querySelector('h5 a') || el.querySelector('a');
-      const pic = el.querySelector('[data-setbg]');
-      const img = el.querySelector('img');
-      if (!a || !a.getAttribute('href')) return null;
+    const selectors = ['.anime__item', '.latest__item', '.col-lg-4', '.col-md-4', '.col-6', 'article', '.item'];
+    let els = [];
+    for (const sel of selectors) {
+      els = [...doc.querySelectorAll(sel)];
+      if (els.length > 0) break;
+    }
+    if (!els.length) {
+      els = [...doc.querySelectorAll('a img')].map(img => img.closest('a')).filter(Boolean);
+    }
+    const items = els.map(el => {
+      const a = el.querySelector('h5 a, h3 a, h4 a, a[href]') || (el.tagName === 'A' ? el : el.querySelector('a'));
+      const pic = el.querySelector('[data-setbg]') || el;
+      const img = el.querySelector('img') || (el.tagName === 'IMG' ? el : null);
+      const href = a ? a.getAttribute('href') : (el.tagName === 'A' ? el.getAttribute('href') : null);
+      if (!href) return null;
+      let title = (a ? a.textContent.trim() : '') || (img && img.alt) || '';
+      if (!title && a) title = a.title || '';
       return {
-        title: a.textContent.trim() || (img && img.alt) || '',
-        url: JK.root(abs(a.getAttribute('href'), JK.base)),
-        cover: abs((pic && pic.dataset.setbg) || (img && img.src) || '', JK.base)
+        title: title.trim(),
+        url: JK.root(abs(href, JK.base)),
+        cover: abs((pic && pic.dataset && pic.dataset.setbg) || (img && (img.src || img.dataset.src)) || '', JK.base)
       };
-    }).filter(x => x && x.title);
+    }).filter(x => x && x.title && x.url);
     return uniqBy(items, 'url');
   },
   async latest() { return this.parseList(toDoc(await get(this.base + '/'))); },
   async search(q) { return this.parseList(toDoc(await get(this.base + '/buscar/' + encodeURIComponent(q) + '/'))); },
+  async genre(g) {
+    try {
+      return this.parseList(toDoc(await get(this.base + '/genero/' + g + '/')));
+    } catch (e) { return []; }
+  },
   async detail(url) {
     const html = await get(url);
     const d = toDoc(html);
@@ -111,7 +129,7 @@ const JK = {
       let max = 0;
       const m = html.match(/Episodios[^0-9<]{0,25}(?:<[^>]+>\s*)*(\d+)/i);
       if (m) max = parseInt(m[1]);
-      const re = new RegExp(url.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(\\d+)/?', 'g');
+      const re = new RegExp(url.replace(/[.*+?^${}()|[\]\]/g, '\\$&') + '(\d+)/?', 'g');
       let x; while ((x = re.exec(html))) max = Math.max(max, parseInt(x[1]));
       for (let i = 1; i <= max; i++) eps.push(i);
     }
@@ -153,7 +171,7 @@ const JK = {
     let x;
     while ((x = re.exec(html))) {
       snippets.push(x[0].slice(0, 260));
-      const s = x[3].match(/src=\\?["']([^"'\\\s]+)/);
+      const s = x[3].match(/src=\?\?["']([^"'\\\s]+)/);
       if (s) add(nameOf(+x[1]), abs(unesc(s[1]), this.base));
     }
     // 2) "remote" en base64 -> si es una URL, es un embed directo
@@ -201,13 +219,19 @@ const AV = {
   },
   async latest() { return this.parseList(toDoc(await get(this.base + '/catalogo'))); },
   async search(q) { return this.parseList(toDoc(await get(this.base + '/catalogo?search=' + encodeURIComponent(q)))); },
+  async genre(g) {
+    try {
+      const qMap = { romance: 'romance', accion: 'accion', comedia: 'comedia', fantasia: 'fantasia' };
+      return this.search(qMap[g] || g);
+    } catch (e) { return []; }
+  },
   async detail(url) {
     const html = await get(url);
     const d = toDoc(html);
     const meta = p => (d.querySelector('meta[property="' + p + '"]') || {}).content || '';
     const slug = new URL(url).pathname.split('/').filter(Boolean)[1];
     const nums = new Set();
-    const re = new RegExp('/media/' + slug.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '/(\\d+)', 'g');
+    const re = new RegExp('/media/' + slug.replace(/[.*+?^${}()|[\]\]/g, '\\$&') + '/(\d+)', 'g');
     let x; while ((x = re.exec(html))) nums.add(parseInt(x[1]));
     const poster = [...d.querySelectorAll('img')].find(i => /covers/.test(i.getAttribute('src') || ''));
     const descM = d.querySelector('meta[name="description"]');

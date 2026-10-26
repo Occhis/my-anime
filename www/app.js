@@ -29,20 +29,57 @@ const seen = (s, u) => store.get(seenKey(s, u), []);
 function markSeen(s, u, n) { const a = seen(s, u); if (!a.includes(n)) a.push(n); store.set(seenKey(s, u), a); store.set('last:' + s + '|' + u, n); }
 
 /* ---- vistas ---- */
+const GENRES = [
+  { id: 'romance', name: 'Romance' },
+  { id: 'accion', name: 'Acción / Lucha' },
+  { id: 'comedia', name: 'Comedia' },
+  { id: 'fantasia', name: 'Fantasía' }
+];
+
 async function viewHome() {
   const my = ++token;
   const chips = Object.values(SOURCES).map(s => `<button class="chip ${s.id === curSrc ? 'on' : ''}" data-s="${s.id}">${s.name}</button>`).join('');
   app.innerHTML = `<h1>MiAnime</h1><div class="chips">${chips}</div>
     <form id="sf"><input id="q" placeholder="Buscar anime…" value="${esc(query)}"><button class="btn">Buscar</button></form>
-    <div id="list" class="grid"><p class="msg">Cargando…</p></div>`;
+    <div id="content"><p class="msg">Cargando…</p></div>`;
   app.querySelectorAll('.chip').forEach(b => b.onclick = () => { curSrc = b.dataset.s; store.set('src', curSrc); viewHome(); });
   $('#sf').onsubmit = e => { e.preventDefault(); query = $('#q').value.trim(); viewHome(); };
+  
+  const src = SOURCES[curSrc];
   try {
-    const src = SOURCES[curSrc];
-    const list = query ? await src.search(query) : await src.latest();
-    if (my !== token) return;
-    $('#list').innerHTML = list.length ? list.map(a => card(curSrc, a)).join('') : '<p class="msg">Sin resultados (o los selectores de esta web cambiaron).</p>';
-  } catch (e) { if (my === token) $('#list').innerHTML = errBox(e, 'viewHome()'); }
+    if (query) {
+      const list = await src.search(query);
+      if (my !== token) return;
+      $('#content').innerHTML = `<div class="grid">${list.length ? list.map(a => card(curSrc, a)).join('') : '<p class="msg">Sin resultados.</p>'}</div>`;
+    } else {
+      const latestPromise = src.latest();
+      const genrePromises = GENRES.map(async g => {
+        try {
+          const list = src.genre ? await src.genre(g.id) : await src.search(g.name);
+          return { ...g, list: list.slice(0, 6) };
+        } catch (e) {
+          return { ...g, list: [] };
+        }
+      });
+      
+      const latest = await latestPromise;
+      const genresData = await Promise.all(genrePromises);
+      if (my !== token) return;
+
+      let html = '';
+      html += `<div class="section-title">Últimos animes</div>`;
+      html += latest.length ? `<div class="horizontal-grid">${latest.slice(0, 10).map(a => card(curSrc, a)).join('')}</div>` : `<p class="msg">No hay animes recientes.</p>`;
+
+      for (const g of genresData) {
+        if (g.list.length > 0) {
+          html += `<div class="section-title">${g.name}</div>`;
+          html += `<div class="horizontal-grid">${g.list.map(a => card(curSrc, a)).join('')}</div>`;
+        }
+      }
+
+      $('#content').innerHTML = html;
+    }
+  } catch (e) { if (my === token) $('#content').innerHTML = errBox(e, 'viewHome()'); }
 }
 
 function viewFav() {

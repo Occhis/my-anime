@@ -35,3 +35,6 @@ nav{position:fixed;bottom:0;left:0;right:0;display:flex;background:#12141c;borde
 nav a{flex:1;text-align:center;padding:14px 0;color:var(--mut);font-size:14px}
 nav a.on{color:var(--acc)}
 nav.hide{display:none}
+.section-title { font-size: 16px; font-weight: bold; margin: 16px 0 8px; color: var(--tx); display: flex; justify-content: space-between; align-items: center; }
+.horizontal-grid { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 8px; }
+.horizontal-grid .card { min-width: 105px; width: 105px; flex-shrink: 0; }
