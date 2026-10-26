@@ -84,16 +84,33 @@ const JK = {
   episodeUrl(url, n) { return url.replace(/\/?$/, '/') + n + '/'; },
   async servers(epUrl) {
     const html = await get(epUrl, this.base + '/');
-    let names = [];
-    const m = html.match(/var servers\s*=\s*(\[.*?\]);/s);
-    if (m) { try { names = JSON.parse(m[1]).map(s => s.server); } catch (e) {} }
     const out = [];
-    const re = /video\[(\d+)\]\s*=\s*(?:'|")<iframe[^>]*?src=\\?["']([^"'\\\s]+)/g;
+    const add = (name, url) => {
+      if (!url || !/^https?:/i.test(url) || out.some(o => o.url === url)) return;
+      if (out.some(o => o.name === name)) name += ' (2)';
+      out.push({ name, url });
+    };
+    let list = [];
+    const m = html.match(/var servers\s*=\s*(\[[\s\S]*?\]);/);
+    if (m) { try { list = JSON.parse(m[1]); } catch (e) {} }
+    const names = list.map(s => s.server);
+    // 1) todos los video[n] = '<iframe src=...>'
+    const snippets = [];
+    const re = /video\[(\d+)\]\s*=\s*(['"])([\s\S]*?)\2\s*;/g;
     let x;
-    while ((x = re.exec(html))) out.push({ name: names[x[1] - 1] || ('Servidor ' + x[1]), url: abs(unesc(x[2]), this.base) });
-    if (!out.length) {
-      toDoc(html).querySelectorAll('iframe[src]').forEach((f, i) => out.push({ name: 'Servidor ' + (i + 1), url: abs(f.getAttribute('src'), this.base) }));
+    while ((x = re.exec(html))) {
+      snippets.push(x[0].slice(0, 260));
+      const s = x[3].match(/src=\\?["']([^"'\\\s]+)/);
+      if (s) add(names[x[1] - 1] || ('Servidor ' + x[1]), abs(unesc(s[1]), this.base));
     }
+    // 2) "remote" en base64 -> si es una URL, es un embed directo
+    list.forEach(sv => {
+      try { const d = atob(sv.remote); if (/^https?:\/\//i.test(d)) add(sv.server, d); } catch (e) {}
+    });
+    // 3) cualquier iframe suelto
+    if (!out.length) toDoc(html).querySelectorAll('iframe[src]').forEach((f, i) => add('Servidor ' + (i + 1), abs(f.getAttribute('src'), this.base)));
+    out.diag = 'JKAnime\nservers=' + (m ? m[1].slice(0, 2500) : '(no encontrado)') +
+      '\n\nvideo[] (' + snippets.length + '):\n' + snippets.join('\n') + '\n\nencontrados: ' + out.map(o => o.name).join(', ');
     return out;
   }
 };
@@ -101,20 +118,33 @@ const JK = {
 /* ---------- AnimeAV1 ---------- */
 const AV = {
   id: 'animeav1', name: 'AnimeAV1', base: 'https://animeav1.com',
+  slugOf(href) {
+    const p = new URL(abs(href, AV.base)).pathname.split('/').filter(Boolean);
+    return p[0] === 'media' && p.length === 2 ? p[1] : null;
+  },
   parseList(doc) {
-    const items = [...doc.querySelectorAll('a[href*="/media/"]')].map(a => {
-      const img = a.querySelector('img');
-      if (!img) return null;
-      const h = a.querySelector('h3,h2,header');
-      const href = abs(a.getAttribute('href'), AV.base);
-      const p = new URL(href).pathname.split('/').filter(Boolean);   // media, slug, [ep]
-      return {
-        title: ((h && h.textContent) || img.alt || '').trim(),
-        url: AV.base + '/media/' + p[1],
-        cover: abs(img.getAttribute('src') || img.dataset.src || '', AV.base)
-      };
-    }).filter(x => x && x.title);
-    return uniqBy(items, 'url');
+    const out = [];
+    doc.querySelectorAll('a[href*="/media/"]').forEach(a => {
+      const slug = AV.slugOf(a.getAttribute('href'));
+      if (!slug) return;
+      // sube por el DOM hasta el contenedor de la tarjeta (que tenga imagen y un solo anime)
+      let box = a, best = null;
+      for (let i = 0; i < 6; i++) {
+        box = box.parentElement;
+        if (!box || box === doc.body) break;
+        const slugs = new Set([...box.querySelectorAll('a[href*="/media/"]')].map(l => (new URL(abs(l.getAttribute('href'), AV.base)).pathname.split('/')[2])));
+        if (slugs.size > 1) break;
+        if (box.querySelector('img')) best = box;
+      }
+      if (!best) return;
+      const imgs = [...best.querySelectorAll('img')];
+      const img = imgs.find(i => /covers/.test(i.getAttribute('src') || '')) || imgs[0];
+      const h = best.querySelector('h3,h2');
+      const title = ((h && h.textContent) || (img.getAttribute('alt') || '').replace(/^(Portada|Póster) de /, '')).trim();
+      if (!title) return;
+      out.push({ title, url: AV.base + '/media/' + slug, cover: abs(img.getAttribute('src') || img.dataset.src || '', AV.base) });
+    });
+    return uniqBy(out, 'url');
   },
   async latest() { return this.parseList(toDoc(await get(this.base + '/catalogo'))); },
   async search(q) { return this.parseList(toDoc(await get(this.base + '/catalogo?search=' + encodeURIComponent(q)))); },
@@ -124,25 +154,77 @@ const AV = {
     const meta = p => (d.querySelector('meta[property="' + p + '"]') || {}).content || '';
     const slug = new URL(url).pathname.split('/').filter(Boolean)[1];
     const nums = new Set();
-    const re = new RegExp('/media/' + slug + '/(\\d+)', 'g');
+    const re = new RegExp('/media/' + slug.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '/(\\d+)', 'g');
     let x; while ((x = re.exec(html))) nums.add(parseInt(x[1]));
-    const eps = [...nums].sort((a, b) => a - b);
+    const poster = [...d.querySelectorAll('img')].find(i => /covers/.test(i.getAttribute('src') || ''));
+    const descM = d.querySelector('meta[name="description"]');
     return {
       title: ((d.querySelector('h1') || {}).textContent || meta('og:title')).trim(),
-      cover: abs(meta('og:image'), this.base),
-      synopsis: meta('og:description'),
-      episodes: eps
+      cover: abs((poster && poster.getAttribute('src')) || meta('og:image'), this.base),
+      synopsis: meta('og:description') || (d.querySelector('h1') && d.querySelector('h1').parentElement.querySelector('p') || {}).textContent || (descM && descM.content) || '',
+      episodes: [...nums].sort((a, b) => a - b)
     };
   },
   episodeUrl(url, n) { return url.replace(/\/$/, '') + '/' + n; },
   async servers(epUrl) {
     const html = await get(epUrl, this.base + '/');
     const out = [];
-    const pair = /["']?server["']?\s*:\s*"([^"]+)"\s*,\s*["']?url["']?\s*:\s*"([^"]+)"/g;
-    const blocks = [...html.matchAll(/\b(SUB|DUB)\s*:\s*\[(.*?)\]/gs)];
-    const scan = (txt, lang) => { let m; pair.lastIndex = 0; while ((m = pair.exec(txt))) out.push({ name: (lang ? lang + ' · ' : '') + m[1], url: unesc(m[2]) }); };
-    if (blocks.length) blocks.forEach(b => scan(b[2], b[1])); else scan(html, '');
-    return uniqBy(out, 'url');
+    const junk = u => /animeav1\.com|discord\.gg|google|gstatic|w3\.org|svelte|github|schema\.org|\.(jpg|jpeg|png|webp|avif|svg|css|ico|woff2?)(\?|$)/i.test(u);
+    const add = (lang, name, url) => {
+      url = unesc(String(url));
+      if (!/^https?:/i.test(url) || junk(url) || out.some(o => o.url === url)) return;
+      out.push({ name: (lang ? lang + ' · ' : '') + name, url });
+    };
+    // A) objetos {server:"..",url:".."} dentro del HTML/JS de la página
+    const objRe = /\{[^{}]*\}/g; let m;
+    while ((m = objRe.exec(html))) {
+      const c = m[0]; if (c.length > 700) continue;
+      const u = c.match(/["']?(?:url|link|src|embed)["']?\s*:\s*["'](https?:[^"']+)["']/i);
+      const n = c.match(/["']?(?:server|name|provider|label)["']?\s*:\s*["']([^"']+)["']/i);
+      if (u && n) {
+        const back = html.slice(Math.max(0, m.index - 400), m.index);
+        const l = [...back.matchAll(/\b(SUB|DUB|LAT)\b["']?\s*:/g)].pop();
+        add(l ? l[1] : '', n[1], u[1]);
+      }
+    }
+    // B) endpoint de datos de SvelteKit (__data.json, formato devalue)
+    let usedB = false;
+    if (!out.length) {
+      try {
+        usedB = true;
+        const j = JSON.parse(await get(epUrl.replace(/\/$/, '') + '/__data.json', epUrl));
+        const res = (arr, i, d) => {
+          if (typeof i !== 'number' || i < 0 || d > 14) return null;
+          const v = arr[i];
+          if (v === null || typeof v !== 'object') return v;
+          if (Array.isArray(v)) return v.map(k => res(arr, k, d + 1));
+          const o = {}; for (const k in v) o[k] = res(arr, v[k], d + 1); return o;
+        };
+        const walk = (o, lang) => {
+          if (Array.isArray(o)) return o.forEach(i => walk(i, lang));
+          if (!o || typeof o !== 'object') return;
+          const ks = Object.keys(o);
+          const uk = ks.find(k => /^(url|link|src|embed)$/i.test(k) && typeof o[k] === 'string');
+          const nk = ks.find(k => /^(server|name|provider|label)$/i.test(k) && typeof o[k] === 'string');
+          if (uk && nk) add(lang, o[nk], o[uk]);
+          ks.forEach(k => walk(o[k], /^(SUB|DUB|LAT)$/i.test(k) ? k.toUpperCase() : lang));
+        };
+        (j.nodes || []).forEach(n => { if (n && Array.isArray(n.data)) walk(res(n.data, 0, 0), ''); });
+      } catch (e) {}
+    }
+    // C) último recurso: cualquier URL externa que parezca un reproductor
+    if (!out.length) {
+      const seenH = new Set();
+      for (const mm of html.matchAll(/https?:(?:\\?\/){2}[^"'\s<>\\]+(?:\\u002F[^"'\s<>\\]*)*/g)) {
+        const u = unesc(mm[0]);
+        let host = ''; try { host = new URL(u).hostname.replace(/^www\./, ''); } catch (e) { continue; }
+        if (junk(u) || seenH.has(u)) continue;
+        seenH.add(u); add('', host, u);
+      }
+    }
+    out.diag = 'AnimeAV1\nhtml=' + html.length + ' bytes\nencontrados=' + out.map(o => o.name + ' -> ' + o.url).join('\n') +
+      '\nusedDataJson=' + usedB + '\n\ncontexto:\n' + (html.match(/.{0,300}(?:SUB|embeds).{0,500}/s) || ['(sin SUB/embeds)'])[0];
+    return out;
   }
 };
 

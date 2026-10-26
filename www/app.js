@@ -92,19 +92,36 @@ async function viewWatch(src, url, n) {
       <div class="row"><button class="btn sec" id="fs">⛶ Pantalla completa</button>
       ${prev ? `<a class="btn sec" href="#/watch/${src}/${enc(url)}/${prev}">◀ Anterior</a>` : ''}
       ${next ? `<a class="btn" href="#/watch/${src}/${enc(url)}/${next}">Siguiente ▶</a>` : ''}</div>
-      <p class="msg" style="padding:4px">Si un servidor no carga, prueba otro. Gira el celular para ver mejor.</p>`;
+      <p class="msg" style="padding:4px">${servers.length} servidores encontrados. Si uno no carga, prueba otro. Gira el celular para ver mejor.</p>
+      <button class="btn sec" id="dg">🛠 Diagnóstico</button>
+      <textarea id="dgbox" readonly style="display:none;width:100%;height:220px;margin-top:8px;background:#1a1d27;color:#ccc;border:0;border-radius:8px;font-size:11px"></textarea>`;
     const pl = $('#pl');
     const play = k => {
       if (!servers[k]) return;
-      pl.querySelectorAll('iframe').forEach(f => f.remove());
-      const f = document.createElement('iframe');
-      f.src = servers[k].url;
-      f.allow = 'autoplay; fullscreen; encrypted-media; picture-in-picture';
-      f.allowFullscreen = true;
-      f.referrerPolicy = 'origin';
+      pl.querySelectorAll('iframe,video').forEach(f => f.remove());
+      let f;
+      if (/\.(m3u8|mp4)(\?|#|$)/i.test(servers[k].url)) {
+        f = document.createElement('video');
+        f.controls = true; f.autoplay = true; f.playsInline = true;
+        f.style.cssText = 'width:100%;height:100%;background:#000';
+        f.src = servers[k].url;
+      } else {
+        f = document.createElement('iframe');
+        f.src = servers[k].url;
+        f.allow = 'autoplay; fullscreen; encrypted-media; picture-in-picture';
+        f.allowFullscreen = true;
+        f.referrerPolicy = 'origin';
+      }
       pl.appendChild(f);
       $('#srv').querySelectorAll('.chip').forEach(c => c.classList.toggle('on', +c.dataset.k === k));
       store.set('pref', servers[k].name);
+    };
+    $('#dg').onclick = () => {
+      const box = $('#dgbox');
+      box.style.display = 'block';
+      box.value = (servers.diag || 'sin datos') + '\n\nURL: ' + S.episodeUrl(url, n);
+      box.focus(); box.select();
+      try { document.execCommand('copy'); } catch (e) {}
     };
     $('#srv').querySelectorAll('.chip').forEach(c => c.onclick = () => play(+c.dataset.k));
     $('#fs').onclick = () => pl.classList.add('fs');
