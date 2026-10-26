@@ -108,7 +108,7 @@ async function viewWatch(src, url, n) {
       f.allowFullscreen = true;
       f.referrerPolicy = 'no-referrer';
       // sandbox sin allow-popups ni allow-top-navigation: los anuncios no pueden abrir ventanas ni redirigir la app
-      if (store.get('shield', true)) f.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-forms allow-presentation');
+      if (store.get('shield2', false)) f.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-forms allow-presentation');
       pl.appendChild(f);
     };
     const showVideo = (u, onFail) => {
@@ -138,11 +138,11 @@ async function viewWatch(src, url, n) {
       showFrame(sv.url);
     };
     const refreshToggles = () => {
-      $('#tgS').textContent = '🛡 Anti-anuncios: ' + (store.get('shield', true) ? 'ON' : 'OFF');
+      $('#tgS').textContent = '🧱 Sandbox (puede bloquear reproductores): ' + (store.get('shield2', false) ? 'ON' : 'OFF');
       $('#tgD').textContent = '⚡ Enlace directo: ' + (store.get('direct', true) ? 'ON' : 'OFF');
     };
     let cur = 0;
-    $('#tgS').onclick = () => { store.set('shield', !store.get('shield', true)); refreshToggles(); play(cur); };
+    $('#tgS').onclick = () => { store.set('shield2', !store.get('shield2', false)); refreshToggles(); play(cur); };
     $('#tgD').onclick = () => { store.set('direct', !store.get('direct', true)); refreshToggles(); play(cur); };
     refreshToggles();
     $('#dg').onclick = () => {
