@@ -67,29 +67,38 @@ const JK = {
     return this.base + '/' + p[0] + '/';
   },
   parseList(doc) {
-    const selectors = ['.anime__item', '.latest__item', '.col-lg-4', '.col-md-4', '.col-6', 'article', '.item'];
-    let els = [];
-    for (const sel of selectors) {
-      els = [...doc.querySelectorAll(sel)];
-      if (els.length > 0) break;
-    }
-    if (!els.length) {
-      els = [...doc.querySelectorAll('a img')].map(img => img.closest('a')).filter(Boolean);
-    }
-    const items = els.map(el => {
-      const a = el.querySelector('h5 a, h3 a, h4 a, a[href]') || (el.tagName === 'A' ? el : el.querySelector('a'));
-      const pic = el.querySelector('[data-setbg]') || el;
-      const img = el.querySelector('img') || (el.tagName === 'IMG' ? el : null);
-      const href = a ? a.getAttribute('href') : (el.tagName === 'A' ? el.getAttribute('href') : null);
-      if (!href) return null;
-      let title = (a ? a.textContent.trim() : '') || (img && img.alt) || '';
-      if (!title && a) title = a.title || '';
-      return {
-        title: title.trim(),
-        url: JK.root(abs(href, JK.base)),
-        cover: abs((pic && pic.dataset && pic.dataset.setbg) || (img && (img.src || img.dataset.src)) || '', JK.base)
-      };
-    }).filter(x => x && x.title && x.url);
+    const items = [];
+    const nodes = doc.querySelectorAll('.anime__item, .col-lg-4, .col-md-4, .col-lg-3, .col-md-3, .col-6, article');
+    
+    nodes.forEach(el => {
+      const a = el.querySelector('a[href]');
+      if (!a) return;
+      const href = a.getAttribute('href');
+      if (!href || href.includes('/buscar/') || href.includes('/genero/') || href.includes('/directorio/') || href.includes('/ajax/') || href.includes('discord') || href.includes('t.me')) return;
+
+      const pic = el.querySelector('[data-setbg]');
+      const img = el.querySelector('img');
+      
+      const imgUrl = (pic && pic.dataset && pic.dataset.setbg) || (img && (img.src || img.dataset.src)) || '';
+      if (imgUrl.toLowerCase().includes('logo') || (img && img.alt && img.alt.toLowerCase().includes('logo'))) return;
+
+      const titleEl = el.querySelector('h5, h3, h4, .title, span') || a;
+      let title = titleEl ? titleEl.textContent.trim() : '';
+      if (!title && img) title = img.alt || '';
+      if (!title) {
+        const h = el.querySelector('a');
+        if (h) title = h.textContent.trim();
+      }
+
+      if (title && !title.toLowerCase().includes('logo') && title.length > 1) {
+        items.push({
+          title: title,
+          url: JK.root(abs(href, JK.base)),
+          cover: abs(imgUrl, JK.base)
+        });
+      }
+    });
+
     return uniqBy(items, 'url');
   },
   async latest() { return this.parseList(toDoc(await get(this.base + '/'))); },
@@ -296,7 +305,7 @@ const AV = {
       for (const mm of html.matchAll(/https?:(?:\\?\/){2}[^"'\s<>\\]+(?:\\u002F[^"'\s\\<>]*)*/g)) {
         const u = unesc(mm[0]);
         let host = ''; try { host = new URL(u).hostname.replace(/^www\./, ''); } catch (e) { continue; }
-        if (junk(u) || seenH.has(u)) continue;
+        if (junk(u) || seenH.status || seenH.has(u)) continue;
         seenH.add(u); add('', host, u);
       }
     }
