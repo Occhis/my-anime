@@ -19,7 +19,7 @@ async function get(url, referer) {
 }
 const toDoc = h => new DOMParser().parseFromString(h, 'text/html');
 const abs = (u, base) => { try { return new URL(u, base).href; } catch (e) { return u; } };
-const unesc = s => s.replace(/\u002F/gi, '/').replace(/\\//g, '/').replace(/&amp;/g, '&');
+const unesc = s => s.replace(/\\u002F/gi, '/').replace(/\\\//g, '/').replace(/&amp;/g, '&');
 const uniqBy = (arr, key) => { const s = new Set(); return arr.filter(x => !s.has(x[key]) && s.add(x[key])); };
 
 
@@ -30,12 +30,12 @@ function unpackAll(html) {
   let m;
   while ((m = re.exec(html))) {
     try {
-      let p = m[1].replace(/\'/g, "'").replace(/\\/g, '\');
+      let p = m[1].replace(/\\'/g, "'").replace(/\\\\/g, '\\');
       const a = +m[2]; let c = +m[3]; const k = m[4].split('|');
       const e = n => (n < a ? '' : e(parseInt(n / a))) + ((n = n % a) > 35 ? String.fromCharCode(n + 29) : n.toString(36));
       const d = {};
       while (c--) d[e(c)] = k[c] || e(c);
-      out.push(p.replace(/\w+/g, w => (d[w] !== undefined ? d[w] : w)));
+      out.push(p.replace(/\b\w+\b/g, w => (d[w] !== undefined ? d[w] : w)));
     } catch (e) {}
   }
   return out;
@@ -43,14 +43,14 @@ function unpackAll(html) {
 async function resolveDirect(url, referer) {
   if (/\.(m3u8|mp4)(\?|#|$)/i.test(url)) return { url };
   const html = await get(url, referer);
-  const text = [html, ...unpackAll(html)].join('\n').replace(/\u002F/gi, '/').replace(/\\//g, '/');
+  const text = [html, ...unpackAll(html)].join('\n').replace(/\\u002F/gi, '/').replace(/\\\//g, '/');
   const bad = /\.(jpg|jpeg|png|webp|gif|vtt|srt|ass|js|css)(\?|$)/i;
   const pats = [
     /["']?(?:file|src|source|hls\d?|url|video_url|contentUrl)["']?\s*[:=]\s*["'](https?:[^"'\s]+?\.m3u8[^"'\s]*)["']/i,
     /["']?(?:file|src|source|video_url|contentUrl|url)["']?\s*[:=]\s*["'](https?:[^"'\s]+?\.mp4[^"'\s]*)["']/i,
-    /(https?:\/\/[^"'\s\<>]+\.m3u8[^"'\s\<>]*)/i,
+    /(https?:\/\/[^"'\s\\<>]+\.m3u8[^"'\s\\<>]*)/i,
     /<source[^>]+src=["']([^"']+)["']/i,
-    /(https?:\/\/[^"'\s\<>]+\.mp4[^"'\s\<>]*)/i
+    /(https?:\/\/[^"'\s\\<>]+\.mp4[^"'\s\\<>]*)/i
   ];
   for (const p of pats) {
     const m = text.match(p);
@@ -129,7 +129,7 @@ const JK = {
       let max = 0;
       const m = html.match(/Episodios[^0-9<]{0,25}(?:<[^>]+>\s*)*(\d+)/i);
       if (m) max = parseInt(m[1]);
-      const re = new RegExp(url.replace(/[.*+?^${}()|[\]\]/g, '\\$&') + '(\d+)/?', 'g');
+      const re = new RegExp(url.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(\\d+)/?', 'g');
       let x; while ((x = re.exec(html))) max = Math.max(max, parseInt(x[1]));
       for (let i = 1; i <= max; i++) eps.push(i);
     }
@@ -171,7 +171,7 @@ const JK = {
     let x;
     while ((x = re.exec(html))) {
       snippets.push(x[0].slice(0, 260));
-      const s = x[3].match(/src=\?\?["']([^"'\\\s]+)/);
+      const s = x[3].match(/src=\\?["']([^"'\\\s]+)/);
       if (s) add(nameOf(+x[1]), abs(unesc(s[1]), this.base));
     }
     // 2) "remote" en base64 -> si es una URL, es un embed directo
@@ -231,7 +231,7 @@ const AV = {
     const meta = p => (d.querySelector('meta[property="' + p + '"]') || {}).content || '';
     const slug = new URL(url).pathname.split('/').filter(Boolean)[1];
     const nums = new Set();
-    const re = new RegExp('/media/' + slug.replace(/[.*+?^${}()|[\]\]/g, '\\$&') + '/(\d+)', 'g');
+    const re = new RegExp('/media/' + slug.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '/(\\d+)', 'g');
     let x; while ((x = re.exec(html))) nums.add(parseInt(x[1]));
     const poster = [...d.querySelectorAll('img')].find(i => /covers/.test(i.getAttribute('src') || ''));
     const descM = d.querySelector('meta[name="description"]');
@@ -257,8 +257,8 @@ const AV = {
     const objRe = /\{[^{}]*\}/g; let m;
     while ((m = objRe.exec(html))) {
       const c = m[0]; if (c.length > 700) continue;
-      const u = c.match(/["']?(?:url|link|src|embed)["']?\s*:\s*["'](https?:[^"']+)["']/i);
-      const n = c.match(/["']?(?:server|name|provider|label)["']?\s*:\s*["']([^"']+)["']/i);
+      const u = c.match(/["']?(?:url|link|src|embed)["']?\s*[:=]\s*["'](https?:[^"']+)["']/i);
+      const n = c.match(/["']?(?:server|name|provider|label)["']?\s*[:=]\s*["']([^"']+)["']/i);
       if (u && n) {
         const back = html.slice(Math.max(0, m.index - 400), m.index);
         const l = [...back.matchAll(/\b(SUB|DUB|LAT)\b["']?\s*:/g)].pop();
@@ -293,7 +293,7 @@ const AV = {
     // C) último recurso: cualquier URL externa que parezca un reproductor
     if (!out.length) {
       const seenH = new Set();
-      for (const mm of html.matchAll(/https?:(?:\\?\/){2}[^"'\s<>\\]+(?:\\u002F[^"'\s<>\\]*)*/g)) {
+      for (const mm of html.matchAll(/https?:(?:\\?\/){2}[^"'\s<>\\]+(?:\\u002F[^"'\s\\<>]*)*/g)) {
         const u = unesc(mm[0]);
         let host = ''; try { host = new URL(u).hostname.replace(/^www\./, ''); } catch (e) { continue; }
         if (junk(u) || seenH.has(u)) continue;
