@@ -1,0 +1,7 @@
+1) Crea cuenta en github.com y un repositorio nuevo (privado o publico).
+2) Sube TODO el contenido de esta carpeta (incluida la carpeta .github).
+   Si .github no aparece al subir: "Add file > Create new file", nombre:
+   .github/workflows/build-apk.yml  y pega el contenido del archivo.
+3) Pestaña "Actions" > "Build APK" > "Run workflow". Espera ~5-8 min.
+4) Entra a la ejecucion terminada > "Artifacts" > descarga MiAnime-APK.
+5) Descomprime, copia app-debug.apk al celular e instalalo (permitir "origenes desconocidos").

@@ -1,0 +1,8 @@
+{
+  "appId": "com.mianime.app",
+  "appName": "MiAnime",
+  "webDir": "www",
+  "server": { "androidScheme": "https" },
+  "android": { "allowMixedContent": true },
+  "plugins": { "CapacitorHttp": { "enabled": true } }
+}
